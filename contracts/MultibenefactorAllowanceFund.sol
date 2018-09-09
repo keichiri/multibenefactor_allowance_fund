@@ -66,6 +66,9 @@ contract MultibenefactorAllowanceFund {
         benefactors = _benefactors;
     }
 
+    /// @notice The fallback payable function which is used for funding this fund contract
+    function () public onlyBenefactor payable {}
+
     /// @dev Creates allowance for provided beneficiary
     /// @param _allowed The amount of funds allowed
     /// @param _beneficiary The receiver of funds

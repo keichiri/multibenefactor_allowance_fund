@@ -17,7 +17,7 @@ contract("MultibenefactorAllowanceFund", accounts => {
         assert.ok(fund);
     })
 
-    describe("constructor", () => {
+    describe("Constructor", () => {
         it("sets initial benefactors and maximum allowance", async() => {
             let retrievedBenefactors = await fund.getBenefactors();
             let retrievedMaximumAllowance = await fund.maximumAllowance();
@@ -121,6 +121,24 @@ contract("MultibenefactorAllowanceFund", accounts => {
 
         it("Reverts if approving nonactive allowance", async() => {
             await assertRevert(fund.approveAllowance(2, {from: benefactor1}));
+        })
+    })
+
+    describe("Funding", () => {
+        let funding = web3.toWei("1", "ether");
+
+        it("Accepts funds from benefactor", async() => {
+            let initialBalance = await web3.eth.getBalance(fund.address);
+
+            await fund.sendTransaction({from: benefactor3, value: funding});
+
+            let currentBalance = await web3.eth.getBalance(fund.address);
+
+            assert.equal(currentBalance.toNumber(), initialBalance + funding);
+        })
+
+        it("Does not accept funds from non-benefactors", async() => {
+            await assertRevert(fund.sendTransaction({from: beneficiary2, value: funding}));
         })
     })
 })
