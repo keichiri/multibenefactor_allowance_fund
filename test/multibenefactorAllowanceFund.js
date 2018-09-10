@@ -1,6 +1,15 @@
 const MultibenefactorAllowanceFund = artifacts.require("./MultibenefactorAllowanceFund.sol");
 const { retrieveEvent, assertRevert } = require("./helpers.js");
 
+
+async function weiGasCost(tx) {
+    let actualTx = await web3.eth.getTransaction(tx.tx);
+    let gasUsed = web3.toBigNumber(tx.receipt.gasUsed);
+    let gasPrice = actualTx.gasPrice;
+
+    return gasUsed.mul(gasPrice);
+}
+
 contract("MultibenefactorAllowanceFund", accounts => {
     let fund;
     let benefactor1 = accounts[0];
@@ -9,11 +18,12 @@ contract("MultibenefactorAllowanceFund", accounts => {
     let benefactor4 = accounts[3];
     let beneficiary1 = accounts[4];
     let beneficiary2 = accounts[5];
+    let benefactors = [benefactor1, benefactor2, benefactor3, benefactor4];
     let allowedAmount = web3.toWei(5, 'ether');
-    let maximumAllowance = web3.toWei(100, 'ether');
+    let maximumAllowance = web3.toWei(10, 'ether');
 
     beforeEach(async() => {
-        fund = await MultibenefactorAllowanceFund.new([benefactor1, benefactor2, benefactor3, benefactor4], maximumAllowance);
+        fund = await MultibenefactorAllowanceFund.new(benefactors, maximumAllowance);
         assert.ok(fund);
     })
 
@@ -22,7 +32,7 @@ contract("MultibenefactorAllowanceFund", accounts => {
             let retrievedBenefactors = await fund.getBenefactors();
             let retrievedMaximumAllowance = await fund.maximumAllowance();
 
-            assert.deepEqual(retrievedBenefactors, [benefactor1, benefactor2, benefactor3, benefactor4]);
+            assert.deepEqual(retrievedBenefactors, benefactors);
             assert.equal(maximumAllowance, retrievedMaximumAllowance);
         })
 
@@ -37,7 +47,7 @@ contract("MultibenefactorAllowanceFund", accounts => {
         it("creates new allowance and returns its id", async() => {
             await fund.createAllowance(allowedAmount, beneficiary1, requiredApprovals, {from: benefactor1});
 
-            let allowance = await fund.getAllowanceForId(1);
+            let allowance = await fund.getAllowance(1);
 
             assert.equal(allowance[0], allowedAmount);
             assert.equal(allowance[1], 0);
@@ -87,7 +97,7 @@ contract("MultibenefactorAllowanceFund", accounts => {
         it("Adds sender address to approvers after approval", async() => {
             await fund.approveAllowance(1, {from: benefactor2});
 
-            let allowance = await fund.getAllowanceForId(1);
+            let allowance = await fund.getAllowance(1);
 
             assert.deepEqual(allowance[4], [benefactor1, benefactor2]);
         })
@@ -139,6 +149,100 @@ contract("MultibenefactorAllowanceFund", accounts => {
 
         it("Does not accept funds from non-benefactors", async() => {
             await assertRevert(fund.sendTransaction({from: beneficiary2, value: funding}));
+        })
+    })
+
+    describe("Withdrawing", () => {
+        let withdrawnAmount = web3.toWei("2", "ether");
+        let funding = web3.toWei("20", "ether");
+
+        beforeEach(async() => {
+            let tx = await fund.createAllowance(allowedAmount, beneficiary1, 3, {from: benefactor1});
+            assert.ok(tx);
+            await fund.approveAllowance(1, {from: benefactor2});
+            await fund.approveAllowance(1, {from: benefactor3});
+            await fund.sendTransaction({from: benefactor4, value: funding});
+        })
+
+        it("Sends money to beneficiary and correctly adjusts total", async() => {
+            let initialBeneficiaryBalance = await web3.eth.getBalance(beneficiary1);
+            let initialAllowanceState = await fund.getAllowance(1);
+
+            let tx = await fund.withdrawAllowed(1, withdrawnAmount, {from: beneficiary1});
+            let gasCost = await weiGasCost(tx);
+
+            let currentBeneficiaryBalance = await web3.eth.getBalance(beneficiary1);
+            let currentAllowanceState = await fund.getAllowance(1);
+
+            assert.equal(currentBeneficiaryBalance.toNumber(), initialBeneficiaryBalance.add(withdrawnAmount).sub(gasCost).toNumber());
+            assert.equal(initialAllowanceState[0].toNumber(), currentAllowanceState[0].toNumber());
+            assert.equal(initialAllowanceState[1].toNumber() + withdrawnAmount, currentAllowanceState[1].toNumber());
+        })
+
+        it("Emits AllowanceConsumption event", async() => {
+            let tx = await fund.withdrawAllowed(1, withdrawnAmount, {from: beneficiary1});
+
+            let event = await retrieveEvent(tx, "AllowanceConsumption");
+
+            assert.isDefined(event);
+            assert.equal(event.args.id, 1);
+            assert.equal(event.args.beneficiary, beneficiary1);
+            assert.equal(event.args.withdrawn, withdrawnAmount);
+            assert.equal(event.args.left, allowedAmount - withdrawnAmount);
+        })
+
+        it("Emits AllowanceSpent event if total amount is withdrawn", async() => {
+            await fund.withdrawAllowed(1, withdrawnAmount, {from: beneficiary1});
+            let tx = await fund.withdrawAllowed(1, allowedAmount - withdrawnAmount, {from: beneficiary1});
+            let event = await retrieveEvent(tx, "AllowanceSpent");
+
+            assert.isDefined(event);
+            assert.equal(event.args.id, 1);
+            assert.equal(event.args.beneficiary, beneficiary1);
+        })
+
+        it("Removes allowance from active allowances if it is spent", async() => {
+            let initialActive = await fund.getActiveAllowances();
+
+            await fund.withdrawAllowed(1, allowedAmount, {from: beneficiary1});
+            let isActive = await fund.isAllowanceActive(1);
+
+            let currentlyActive = await fund.getActiveAllowances();
+
+            assert.equal(initialActive.length, 1);
+            assert.equal(initialActive[0], 1);
+            assert.deepEqual(currentlyActive.length, 0);
+            assert.isFalse(isActive);
+        })
+
+        it("Cannot be withdrawn if not unlocked", async() => {
+            let tx = await fund.createAllowance(allowedAmount, beneficiary1, 4, {from: benefactor2});
+            let event = await retrieveEvent(tx, "AllowanceCreated");
+            let id = event.args.id;
+            await fund.approveAllowance(id, {from: benefactor1});
+            await fund.approveAllowance(id, {from: benefactor3});
+
+            await assertRevert(fund.withdrawAllowed(id, withdrawnAmount, {from: beneficiary1}));
+        })
+
+        it("Reverts if amount larger than left", async() => {
+            try {
+                let tx = await fund.withdrawAllowed.send(1, withdrawnAmount, {from: beneficiary1});
+                console.log(`Tx: ${tx}`);
+            } catch (err) {
+                console.log(`Err: ${err}`);
+            }
+            await assertRevert(fund.withdrawAllowed(1, allowedAmount + 1, {from: beneficiary1}));
+        })
+
+        it("Cannot be spent by benefactor", async() => {
+            let initialBenefactorBalance = web3.eth.getBalance(benefactor1);
+            await assertRevert(fund.withdrawAllowed(1, withdrawnAmount, {from: benefactor1}));
+        })
+
+        it("Cannot be spent by beneficiary of other allowance", async() => {
+            await fund.createAllowance(allowedAmount, beneficiary2, 3, {from: benefactor3});
+            await assertRevert(fund.withdrawAllowed(1, withdrawnAmount, {from: beneficiary2}));
         })
     })
 })
