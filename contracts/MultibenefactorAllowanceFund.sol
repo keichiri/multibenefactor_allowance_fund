@@ -19,6 +19,7 @@ contract MultibenefactorAllowanceFund {
         uint spent;
         address beneficiary;
         uint requiredApprovals;
+        bool frozen;
         address[] approvers;
     }
 
@@ -28,6 +29,7 @@ contract MultibenefactorAllowanceFund {
     event AllowanceUnlocked(uint indexed id, address indexed beneficiary);
     event AllowanceConsumption(uint indexed id, address indexed beneficiary, uint withdrawn, uint left);
     event AllowanceSpent(uint indexed id, address indexed beneficiary);
+    event AllowanceFreeze(uint indexed id, address indexed beneficiary, bool indexed frozen);
 
 
     modifier onlyBenefactor() {
@@ -55,6 +57,11 @@ contract MultibenefactorAllowanceFund {
 
         require(isActive, "Allowance must be active");
 
+        _;
+    }
+
+    modifier isNotFrozen(uint _allowanceID) {
+        require(!allowances[_allowanceID].frozen, "Allowance must not be frozen");
         _;
     }
 
@@ -88,6 +95,7 @@ contract MultibenefactorAllowanceFund {
         allowances[allowanceCounter].beneficiary = _beneficiary;
         allowances[allowanceCounter].requiredApprovals = _requiredApprovals;
         allowances[allowanceCounter].approvers.push(msg.sender);
+        allowances[allowanceCounter].frozen = false;
 
         emit AllowanceCreated(allowanceCounter, _beneficiary, _allowed, _requiredApprovals);
     }
@@ -115,11 +123,17 @@ contract MultibenefactorAllowanceFund {
         }
     }
 
+    /// @notice Freezes allowance so it cannot be withdrawn from
+    /// @param _allowanceID The allowance that is to be frozen
+    function freezeAllowance(uint _allowanceID) public onlyBenefactor isActiveAllowance(_allowanceID) isNotFrozen(_allowanceID) {
+        allowances[_allowanceID].frozen = true;
+        emit AllowanceFreeze(_allowanceID, allowances[_allowanceID].beneficiary, true);
+    }
 
     /// @notice Withdraws funds from the allowance
     /// @param _allowanceID The allowance that is have money withdrawn from
     /// @param _amount The amount that is withdrawn
-    function withdrawAllowed(uint _allowanceID, uint _amount) public isActiveAllowance(_allowanceID) {
+    function withdrawAllowed(uint _allowanceID, uint _amount) public isActiveAllowance(_allowanceID) isNotFrozen(_allowanceID) {
         Allowance storage allowance = allowances[_allowanceID];
         require(allowance.approvers.length >= allowance.requiredApprovals, "Must be approved by required number of approvers");
         require(allowance.beneficiary == msg.sender, "Only beneficiary can withdraw");
@@ -164,12 +178,13 @@ contract MultibenefactorAllowanceFund {
     }
 
     /// @return Allowance data for allowance with provided id
-    function getAllowance(uint _allowanceID) public view returns (uint, uint, address, uint, address[]) {
+    function getAllowance(uint _allowanceID) public view returns (uint, uint, address, uint, bool, address[]) {
         return (
             allowances[_allowanceID].total,
             allowances[_allowanceID].spent,
             allowances[_allowanceID].beneficiary,
             allowances[_allowanceID].requiredApprovals,
+            allowances[_allowanceID].frozen,
             allowances[_allowanceID].approvers
         );
     }
