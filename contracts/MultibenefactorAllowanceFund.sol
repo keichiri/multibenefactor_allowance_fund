@@ -130,6 +130,14 @@ contract MultibenefactorAllowanceFund {
         emit AllowanceFreeze(_allowanceID, allowances[_allowanceID].beneficiary, true);
     }
 
+    /// @notice Unfreezes allowance so it can be withdrawn from once again
+    /// @param _allowanceID The allowance that is to be unfrozen
+    function unfreezeAllowance(uint _allowanceID) public onlyBenefactor isActiveAllowance(_allowanceID) {
+        require(allowances[_allowanceID].frozen, "Allowance must be frozen");
+        allowances[_allowanceID].frozen = false;
+        emit AllowanceFreeze(_allowanceID, allowances[_allowanceID].beneficiary, false);
+    }
+
     /// @notice Withdraws funds from the allowance
     /// @param _allowanceID The allowance that is have money withdrawn from
     /// @param _amount The amount that is withdrawn

@@ -290,4 +290,46 @@ contract("MultibenefactorAllowanceFund", accounts => {
             await assertRevert(fund.freezeAllowance(1, {from: benefactor3}));
         })
     })
+
+    describe("Unfreezing", () => {
+        beforeEach(async() => {
+            let tx = await fund.createAllowance(allowedAmount, beneficiary1, 3, {from: benefactor1});
+            let event = await retrieveEvent(tx, "AllowanceCreated");
+            assert.equal(event.args.id, 1);
+
+            await fund.sendTransaction({from: benefactor4, value: allowedAmount});
+            await fund.approveAllowance(1, {from: benefactor2});
+            await fund.approveAllowance(1, {from: benefactor3});
+            await fund.freezeAllowance(1, {from: benefactor3});
+        })
+
+        it("Sets frozen field on Allowance to false", async() => {
+            await fund.unfreezeAllowance(1, {from: benefactor2});
+            let allowance = await fund.getAllowance(1);
+
+            assert.isFalse(allowance[4]);
+        })
+
+        it("Emits AllowanceFreeze event with frozen set to false", async() => {
+            let tx = await fund.unfreezeAllowance(1, {from: benefactor4});
+            let event = await retrieveEvent(tx, "AllowanceFreeze");
+
+            assert.equal(event.args.id, 1);
+            assert.equal(event.args.beneficiary, beneficiary1);
+            assert.isFalse(event.args.frozen);
+        })
+
+        it("Reverts if called by non-benefactor", async() => {
+            await assertRevert(fund.unfreezeAllowance(1, {from: beneficiary1}));
+        })
+
+        it("Reverts if allowance is not frozen", async() => {
+            await fund.unfreezeAllowance(1, {from: benefactor1});
+            await assertRevert(fund.unfreezeAllowance(1, {from: benefactor1}));
+        })
+
+        it("Reverts if allowance does not exist", async() => {
+            await assertRevert(fund.unfreezeAllowance(2, {from: benefactor1}));
+        })
+    })
 })
